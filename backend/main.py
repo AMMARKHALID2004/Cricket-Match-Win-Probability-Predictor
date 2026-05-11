@@ -99,3 +99,67 @@ def predict_pre_match(data: MatchData):
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/team-analytics/{team}")
+def get_team_analytics(team: str):
+    t = team.lower()
+    if df_history is None:
+        raise HTTPException(status_code=500, detail="Database not loaded")
+        
+    past = df_history[(df_history['team_1'] == t) | (df_history['team_2'] == t)].copy()
+    total_matches = len(past)
+    if total_matches == 0:
+        return {"total_matches": 0, "win_rate": 0, "bat_first_win_rate": 0, "bowl_first_win_rate": 0}
+        
+    total_wins = int((past['winner'] == t).sum())
+    win_rate = total_wins / total_matches
+    
+    # Calculate batting first vs bowling first
+    # team batted first if: (toss_winner == team AND decision == 'bat') OR (toss_winner != team AND decision == 'field')
+    def did_bat_first(row):
+        is_toss_winner = (row['toss_winner'] == t)
+        if is_toss_winner:
+            return row['toss_decision'] == 'bat'
+        else:
+            return row['toss_decision'] == 'field'
+            
+    past['batted_first'] = past.apply(did_bat_first, axis=1)
+    
+    bat_first_matches = past[past['batted_first'] == True]
+    bowl_first_matches = past[past['batted_first'] == False]
+    
+    bat_first_wins = int((bat_first_matches['winner'] == t).sum())
+    bowl_first_wins = int((bowl_first_matches['winner'] == t).sum())
+    
+    bat_first_win_rate = bat_first_wins / len(bat_first_matches) if len(bat_first_matches) > 0 else 0
+    bowl_first_win_rate = bowl_first_wins / len(bowl_first_matches) if len(bowl_first_matches) > 0 else 0
+    
+    return {
+        "total_matches": total_matches,
+        "total_wins": total_wins,
+        "win_rate": win_rate,
+        "bat_first_win_rate": bat_first_win_rate,
+        "bowl_first_win_rate": bowl_first_win_rate
+    }
+
+@app.get("/h2h-history")
+def get_h2h_history(team1: str, team2: str):
+    t1 = team1.lower()
+    t2 = team2.lower()
+    if df_history is None:
+        raise HTTPException(status_code=500, detail="Database not loaded")
+        
+    past = df_history[((df_history['team_1'] == t1) & (df_history['team_2'] == t2)) | 
+                      ((df_history['team_1'] == t2) & (df_history['team_2'] == t1))]
+                      
+    past = past.tail(5) # Get last 5 matches
+    
+    history = []
+    for _, row in past.iterrows():
+        history.append({
+            "date": row.get('date', 'Unknown'),
+            "venue": row['venue'].title() if isinstance(row['venue'], str) else row['venue'],
+            "winner": row['winner'].title() if isinstance(row['winner'], str) else row['winner']
+        })
+        
+    return {"history": history[::-1]} # Return most recent first
