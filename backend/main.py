@@ -8,7 +8,6 @@ app = FastAPI(title="Cric AI API", description="Production-Ready T20 Predictor")
 
 current_dir = os.path.dirname(os.path.abspath(__file__))
 
-# 1. Load the Historical Database for Auto-Stats & Valid Options
 try:
     data_path = os.path.join(current_dir, '..', 'data', 'cleaned_base_data.csv')
     df_history = pd.read_csv(data_path)
@@ -21,11 +20,19 @@ try:
     VALID_TEAMS = sorted(list(set(df_history['team_1'].unique()) | set(df_history['team_2'].unique())))
     VALID_VENUES = sorted(list(df_history['venue'].dropna().unique()))
     print(f"Database connected! Loaded {len(VALID_TEAMS)} teams and {len(VALID_VENUES)} venues.")
+    
+    CURRENT_ELO = {}
+    for _, row in df_history.iterrows():
+        t1, t2, winner = row['team_1'], row['team_2'], row['winner']
+        e1, e2 = CURRENT_ELO.get(t1, 1000), CURRENT_ELO.get(t2, 1000)
+        expected_1 = 1 / (1 + 10 ** ((e2 - e1) / 400))
+        CURRENT_ELO[t1] = e1 + 40 * ((1 if winner == t1 else 0) - expected_1)
+        CURRENT_ELO[t2] = e2 + 40 * ((1 if winner == t2 else 0) - (1 - expected_1))
+
 except Exception as e:
     print(f"Database Error: {e}")
     VALID_TEAMS, VALID_VENUES, df_history = [], [], None
 
-# 2. Load the AI Model
 try:
     models_dir = os.path.join(current_dir, '..', 'models', 'saved_models')
     model = joblib.load(os.path.join(models_dir, 'xgboost_pre_match.joblib'))
@@ -33,7 +40,6 @@ try:
 except Exception as e:
     print(f"Model Error: {e}")
 
-# 3. Input Schema
 class MatchData(BaseModel):
     team_1: str
     team_2: str
@@ -51,12 +57,10 @@ class MatchData(BaseModel):
             raise ValueError(f"Unknown team: {v}")
         return v.lower().strip()
 
-# 4. Endpoints
 @app.get("/metadata")
 def get_metadata():
     return {"teams": VALID_TEAMS, "venues": VALID_VENUES}
 
-# NEW: Automated Stats Calculator!
 @app.get("/stats")
 def get_match_stats(team1: str, team2: str):
     t1 = team1.lower()
@@ -81,10 +85,39 @@ def get_match_stats(team1: str, team2: str):
 @app.post("/predict/pre-match")
 def predict_pre_match(data: MatchData):
     try:
-        df = pd.DataFrame([data.model_dump()])
-        df['team1_won_toss'] = (df['toss_winner'] == df['team_1']).astype(int)
-        df = df.drop(columns=['toss_winner'])
+        is_toss_winner = (data.toss_winner == data.team_1)
+        chose_to_bat = (data.toss_decision == 'bat')
+        team1_batting_first = 1 if ((is_toss_winner and chose_to_bat) or (not is_toss_winner and not chose_to_bat)) else 0
+
+        venue_bat_first_win_rate = 0.50 
+        if df_history is not None:
+            past_venue = df_history[df_history['venue'] == data.venue]
+            if len(past_venue) >= 5: 
+                bat_first_wins = 0
+                for _, row in past_venue.iterrows():
+                    if row['toss_decision'] == 'bat':
+                        if row['winner'] == row['toss_winner']: bat_first_wins += 1
+                    else:
+                        if row['winner'] != row['toss_winner']: bat_first_wins += 1
+                venue_bat_first_win_rate = bat_first_wins / len(past_venue)
+
+        team1_elo = CURRENT_ELO.get(data.team_1, 1000)
+        team2_elo = CURRENT_ELO.get(data.team_2, 1000)
+
+        payload_dict = {
+            'team_1': data.team_1,
+            'team_2': data.team_2,
+            'team1_last6_wins': data.team1_last6_wins,
+            'team2_last6_wins': data.team2_last6_wins,
+            'team1_h2h_last10': data.team1_h2h_last10,
+            'team2_h2h_last10': data.team2_h2h_last10,
+            'team1_batting_first': team1_batting_first,
+            'venue_bat_first_win_rate': venue_bat_first_win_rate,
+            'team1_elo': team1_elo,      
+            'team2_elo': team2_elo       
+        }
         
+        df = pd.DataFrame([payload_dict])
         df_encoded = pd.get_dummies(df)
         df_final = df_encoded.reindex(columns=model_columns, fill_value=0)
         
@@ -114,8 +147,6 @@ def get_team_analytics(team: str):
     total_wins = int((past['winner'] == t).sum())
     win_rate = total_wins / total_matches
     
-    # Calculate batting first vs bowling first
-    # team batted first if: (toss_winner == team AND decision == 'bat') OR (toss_winner != team AND decision == 'field')
     def did_bat_first(row):
         is_toss_winner = (row['toss_winner'] == t)
         if is_toss_winner:
@@ -152,7 +183,7 @@ def get_h2h_history(team1: str, team2: str):
     past = df_history[((df_history['team_1'] == t1) & (df_history['team_2'] == t2)) | 
                       ((df_history['team_1'] == t2) & (df_history['team_2'] == t1))]
                       
-    past = past.tail(5) # Get last 5 matches
+    past = past.tail(5) 
     
     history = []
     for _, row in past.iterrows():
@@ -162,4 +193,4 @@ def get_h2h_history(team1: str, team2: str):
             "winner": row['winner'].title() if isinstance(row['winner'], str) else row['winner']
         })
         
-    return {"history": history[::-1]} # Return most recent first
+    return {"history": history[::-1]} 
