@@ -5,7 +5,10 @@ import plotly.express as px
 import plotly.graph_objects as go
 import os
 
-API_URL = os.environ.get("API_URL", "http://127.0.0.1:8000")
+try:
+    API_URL = st.secrets["API_URL"]
+except:
+    API_URL = os.environ.get("API_URL", "http://127.0.0.1:8000")
 
 st.set_page_config(page_title="Cric AI Predictor", page_icon="🏏", layout="wide")
 
