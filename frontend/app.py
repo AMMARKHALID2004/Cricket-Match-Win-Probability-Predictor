@@ -3,13 +3,16 @@ import requests
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
+import os
+
+API_URL = os.environ.get("API_URL", "http://127.0.0.1:8000")
 
 st.set_page_config(page_title="Cric AI Predictor", page_icon="🏏", layout="wide")
 
 @st.cache_data 
 def load_metadata():
     try:
-        res = requests.get("http://127.0.0.1:8000/metadata")
+        res = requests.get(f"{API_URL}/metadata")
         return res.json() if res.status_code == 200 else None
     except:
         return None
@@ -53,7 +56,7 @@ with tab1:
     
     # --- AUTOMATED STATS FETCHING ---
     with st.spinner("Fetching historical team data..."):
-        stats_res = requests.get(f"http://127.0.0.1:8000/stats?team1={team_1}&team2={team_2}")
+        stats_res = requests.get(f"{API_URL}/stats?team1={team_1}&team2={team_2}")
         
     if stats_res.status_code == 200:
         stats = stats_res.json()
@@ -82,7 +85,7 @@ with tab1:
             }
             
             with st.spinner("Crunching historical data and decision trees..."):
-                res = requests.post("http://127.0.0.1:8000/predict/pre-match", json=payload)
+                res = requests.post(f"{API_URL}/predict/pre-match", json=payload)
                 
             if res.status_code == 200:
                 result = res.json()
@@ -107,7 +110,7 @@ with tab2:
     
     if st.button("Fetch Analytics"):
         with st.spinner(f"Loading {selected_team} stats..."):
-            res = requests.get(f"http://127.0.0.1:8000/team-analytics/{selected_team}")
+            res = requests.get(f"{API_URL}/team-analytics/{selected_team}")
             
         if res.status_code == 200:
             data = res.json()
@@ -129,6 +132,18 @@ with tab2:
             })
             fig2 = px.bar(chart_data, x="Situation", y="Win Rate (%)", color="Situation", text_auto='.1f')
             st.plotly_chart(fig2, use_container_width=True)
+            
+            # Fetch and display Elo History
+            res_elo = requests.get(f"{API_URL}/elo-history/{selected_team}")
+            if res_elo.status_code == 200:
+                elo_data = res_elo.json().get('history', [])
+                if elo_data:
+                    st.markdown("#### Elo Rating History")
+                    df_elo = pd.DataFrame(elo_data)
+                    fig_elo = px.line(df_elo, x="match", y="elo", title=f"{selected_team} Form Progression")
+                    fig_elo.update_layout(xaxis_title="Matches Played", yaxis_title="Elo Rating")
+                    st.plotly_chart(fig_elo, use_container_width=True)
+                    
         else:
             st.error("Could not fetch team analytics.")
 
@@ -143,10 +158,24 @@ with tab3:
             st.warning("Please select two different teams.")
         else:
             with st.spinner("Fetching history..."):
-                res = requests.get(f"http://127.0.0.1:8000/h2h-history?team1={h2h_team1}&team2={h2h_team2}")
+                res = requests.get(f"{API_URL}/h2h-history?team1={h2h_team1}&team2={h2h_team2}")
             
             if res.status_code == 200:
-                h2h_data = res.json().get('history', [])
+                json_data = res.json()
+                h2h_data = json_data.get('history', [])
+                t1_wins = json_data.get('team1_wins', 0)
+                t2_wins = json_data.get('team2_wins', 0)
+                
+                if t1_wins > 0 or t2_wins > 0:
+                    st.subheader("Overall H2H Distribution")
+                    pie_data = pd.DataFrame({
+                        "Team": [h2h_team1, h2h_team2],
+                        "Wins": [t1_wins, t2_wins]
+                    })
+                    fig_pie = px.pie(pie_data, values='Wins', names='Team', hole=0.4, title=f"All-Time Matchups ({t1_wins + t2_wins} matches)")
+                    st.plotly_chart(fig_pie, use_container_width=True)
+                    st.divider()
+
                 if not h2h_data:
                     st.info("No recent matches found between these teams.")
                 else:

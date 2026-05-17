@@ -22,16 +22,30 @@ try:
     print(f"Database connected! Loaded {len(VALID_TEAMS)} teams and {len(VALID_VENUES)} venues.")
     
     CURRENT_ELO = {}
+    ELO_HISTORY = {}
+    match_idx = 1
     for _, row in df_history.iterrows():
         t1, t2, winner = row['team_1'], row['team_2'], row['winner']
+        
+        if t1 not in ELO_HISTORY: ELO_HISTORY[t1] = [{"match": 0, "elo": 1000}]
+        if t2 not in ELO_HISTORY: ELO_HISTORY[t2] = [{"match": 0, "elo": 1000}]
+        
         e1, e2 = CURRENT_ELO.get(t1, 1000), CURRENT_ELO.get(t2, 1000)
         expected_1 = 1 / (1 + 10 ** ((e2 - e1) / 400))
-        CURRENT_ELO[t1] = e1 + 40 * ((1 if winner == t1 else 0) - expected_1)
-        CURRENT_ELO[t2] = e2 + 40 * ((1 if winner == t2 else 0) - (1 - expected_1))
+        
+        new_e1 = e1 + 40 * ((1 if winner == t1 else 0) - expected_1)
+        new_e2 = e2 + 40 * ((1 if winner == t2 else 0) - (1 - expected_1))
+        
+        CURRENT_ELO[t1] = new_e1
+        CURRENT_ELO[t2] = new_e2
+        
+        ELO_HISTORY[t1].append({"match": match_idx, "elo": new_e1})
+        ELO_HISTORY[t2].append({"match": match_idx, "elo": new_e2})
+        match_idx += 1
 
 except Exception as e:
     print(f"Database Error: {e}")
-    VALID_TEAMS, VALID_VENUES, df_history = [], [], None
+    VALID_TEAMS, VALID_VENUES, df_history, ELO_HISTORY = [], [], None, {}
 
 try:
     models_dir = os.path.join(current_dir, '..', 'models', 'saved_models')
@@ -182,15 +196,29 @@ def get_h2h_history(team1: str, team2: str):
         
     past = df_history[((df_history['team_1'] == t1) & (df_history['team_2'] == t2)) | 
                       ((df_history['team_1'] == t2) & (df_history['team_2'] == t1))]
+    
+    t1_wins = int((past['winner'] == t1).sum())
+    t2_wins = int((past['winner'] == t2).sum())
                       
-    past = past.tail(5) 
+    past_5 = past.tail(5) 
     
     history = []
-    for _, row in past.iterrows():
+    for _, row in past_5.iterrows():
         history.append({
             "date": row.get('date', 'Unknown'),
             "venue": row['venue'].title() if isinstance(row['venue'], str) else row['venue'],
             "winner": row['winner'].title() if isinstance(row['winner'], str) else row['winner']
         })
         
-    return {"history": history[::-1]} 
+    return {
+        "team1_wins": t1_wins,
+        "team2_wins": t2_wins,
+        "history": history[::-1]
+    }
+
+@app.get("/elo-history/{team}")
+def get_elo_history(team: str):
+    t = team.lower()
+    if t not in ELO_HISTORY:
+        raise HTTPException(status_code=404, detail="Team not found in history")
+    return {"history": ELO_HISTORY[t]}
