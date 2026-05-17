@@ -1,13 +1,26 @@
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, field_validator
 import pandas as pd
 import joblib
 import os
 
+# 1. Initialize FastAPI
 app = FastAPI(title="Cric AI API", description="Production-Ready T20 Predictor")
 
+# 2. Add CORS Middleware (CRITICAL for Streamlit connection)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Allows your Streamlit app to talk to this API
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# 3. Setup Paths
 current_dir = os.path.dirname(os.path.abspath(__file__))
 
+# 4. Load Data and Process ELO
 try:
     data_path = os.path.join(current_dir, '..', 'data', 'cleaned_base_data.csv')
     df_history = pd.read_csv(data_path)
@@ -47,6 +60,7 @@ except Exception as e:
     print(f"Database Error: {e}")
     VALID_TEAMS, VALID_VENUES, df_history, ELO_HISTORY = [], [], None, {}
 
+# 5. Load Machine Learning Models
 try:
     models_dir = os.path.join(current_dir, '..', 'models', 'saved_models')
     model = joblib.load(os.path.join(models_dir, 'xgboost_pre_match.joblib'))
@@ -54,6 +68,7 @@ try:
 except Exception as e:
     print(f"Model Error: {e}")
 
+# 6. Pydantic Models for Validation
 class MatchData(BaseModel):
     team_1: str
     team_2: str
@@ -70,6 +85,11 @@ class MatchData(BaseModel):
         if v.lower().strip() not in VALID_TEAMS:
             raise ValueError(f"Unknown team: {v}")
         return v.lower().strip()
+
+# 7. Routes
+@app.get("/")
+def home():
+    return {"status": "online", "message": "Cric AI API is active and healthy"}
 
 @app.get("/metadata")
 def get_metadata():
@@ -128,7 +148,7 @@ def predict_pre_match(data: MatchData):
             'team1_batting_first': team1_batting_first,
             'venue_bat_first_win_rate': venue_bat_first_win_rate,
             'team1_elo': team1_elo,      
-            'team2_elo': team2_elo       
+            'team2_elo': team2_elo        
         }
         
         df = pd.DataFrame([payload_dict])
